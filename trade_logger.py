@@ -8,18 +8,20 @@ from datetime import datetime
 import config
 
 
-def log_trade(signal: dict, trade_results: list, raw_message: str):
+def log_trade(signal: dict, trade_results: list, raw_message: str, channel_name: str = ""):
     """
     Log a trade event to the JSON file.
 
     Args:
-        signal: The parsed signal from Claude
+        signal: The parsed signal from the LLM
         trade_results: List of execution results from MT5
         raw_message: The original Telegram message text
+        channel_name: The channel the signal came from
     """
     entry = {
         "timestamp": datetime.now().isoformat(),
-        "raw_message": raw_message[:500],  # trim long messages
+        "channel": channel_name,
+        "raw_message": raw_message[:500],
         "parsed_signal": signal,
         "executions": trade_results,
     }

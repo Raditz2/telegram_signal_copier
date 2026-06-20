@@ -19,10 +19,9 @@ def connect():
         mt5.shutdown()
         return False
 
-    if not mt5.symbol_select(config.SYMBOL, True):
-        print(f"[ERROR] Failed to select {config.SYMBOL}")
-        mt5.shutdown()
-        return False
+    # Select the configured default symbol
+    if config.DEFAULT_SYMBOL and not mt5.symbol_select(config.DEFAULT_SYMBOL, True):
+        print(f"[WARN] Failed to select {config.DEFAULT_SYMBOL}")
 
     return True
 
@@ -46,23 +45,49 @@ def reconnect():
 
 
 def get_account_info():
-    """Return account info or None."""
-    return mt5.account_info()
+    """Return account info dict or None."""
+    info = mt5.account_info()
+    if info is None:
+        return None
+    return {
+        "balance": info.balance,
+        "equity": info.equity,
+        "margin": info.margin,
+        "margin_free": info.margin_free,
+        "profit": info.profit,
+        "leverage": info.leverage,
+        "name": info.name,
+        "server": info.server,
+        "currency": info.currency,
+    }
 
 
-def get_tick():
+def get_daily_pnl():
+    """Get today's profit/loss from closed deals."""
+    import datetime as dt
+    today_start = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    history = mt5.history_deals_get(today_start, dt.datetime.now())
+    if history is None:
+        return 0.0
+    return sum(d.profit + d.swap + d.commission for d in history if d.profit is not None) if history else 0.0
+
+
+def get_tick(instrument=None):
     """Get current bid/ask for the symbol."""
-    return mt5.symbol_info_tick(config.SYMBOL)
+    return mt5.symbol_info_tick(instrument or config.DEFAULT_SYMBOL)
 
 
-def get_symbol_info():
+def get_symbol_info(instrument=None):
     """Get symbol details."""
-    return mt5.symbol_info(config.SYMBOL)
+    return mt5.symbol_info(instrument or config.DEFAULT_SYMBOL)
 
 
-def get_open_positions():
+def get_open_positions(instrument=None):
     """Return all open positions placed by this bot."""
-    positions = mt5.positions_get(symbol=config.SYMBOL)
+    if instrument:
+        positions = mt5.positions_get(symbol=instrument)
+    else:
+        positions = mt5.positions_get()
     if positions is None:
         return []
     return [p for p in positions if p.magic == config.MAGIC_NUMBER]
@@ -84,10 +109,16 @@ def execute_signal(signal: dict) -> list:
     entry = signal.get("entry", 0)
     sl = signal.get("sl", 0)
     tp_list = signal.get("tp", [])
+    instrument = signal.get("instrument", config.DEFAULT_SYMBOL)
 
     # Handle close signal
     if direction == "CLOSE" or order_type == "CLOSE":
         return close_all_positions()
+
+    # Select the instrument symbol
+    if not mt5.symbol_select(instrument, True):
+        print(f"[ERROR] Failed to select symbol {instrument}")
+        return []
 
     # If no TPs provided, use entry as single TP (no TP set)
     if not tp_list:
@@ -100,14 +131,14 @@ def execute_signal(signal: dict) -> list:
         lot_per_tp = config.MIN_LOT
 
     # Get current price
-    tick = get_tick()
+    tick = get_tick(instrument)
     if tick is None:
-        print("[ERROR] Cannot get tick data")
+        print(f"[ERROR] Cannot get tick data for {instrument}")
         return []
 
-    sym_info = get_symbol_info()
+    sym_info = get_symbol_info(instrument)
     if sym_info is None:
-        print("[ERROR] Cannot get symbol info")
+        print(f"[ERROR] Cannot get symbol info for {instrument}")
         return []
 
     digits = sym_info.digits
@@ -172,7 +203,7 @@ def execute_signal(signal: dict) -> list:
         # Build the order request
         request = {
             "action": mt5.TRADE_ACTION_DEAL if mt5_type in (mt5.ORDER_TYPE_BUY, mt5.ORDER_TYPE_SELL) else mt5.TRADE_ACTION_PENDING,
-            "symbol": config.SYMBOL,
+            "symbol": instrument,
             "volume": lot_per_tp,
             "type": mt5_type,
             "price": round(price, digits),
@@ -180,7 +211,7 @@ def execute_signal(signal: dict) -> list:
             "tp": round(tp, digits) if tp else 0,
             "deviation": config.DEVIATION,
             "magic": config.MAGIC_NUMBER,
-            "comment": f"SigCopy TP{i+1}",
+            "comment": f"AI-Copier TP{i+1}",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
@@ -193,6 +224,7 @@ def execute_signal(signal: dict) -> list:
             order_type_name = get_order_type_name(mt5_type)
             results.append({
                 "ticket": result.order,
+                "symbol": instrument,
                 "type": order_type_name,
                 "direction": direction,
                 "entry": round(price, digits),
@@ -213,7 +245,7 @@ def close_all_positions() -> list:
     results = []
 
     for pos in positions:
-        tick = get_tick()
+        tick = mt5.symbol_info_tick(pos.symbol)
         if tick is None:
             continue
 
@@ -224,18 +256,18 @@ def close_all_positions() -> list:
             close_type = mt5.ORDER_TYPE_BUY
             close_price = tick.ask
 
-        sym_info = get_symbol_info()
+        sym_info = mt5.symbol_info(pos.symbol)
         digits = sym_info.digits if sym_info else 2
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": config.SYMBOL,
+            "symbol": pos.symbol,
             "volume": pos.volume,
             "type": close_type,
             "price": round(close_price, digits),
             "deviation": config.DEVIATION,
             "magic": config.MAGIC_NUMBER,
-            "comment": "SigCopy Close",
+            "comment": "AI-Copier Close",
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
             "position": pos.ticket,
@@ -247,6 +279,7 @@ def close_all_positions() -> list:
             direction = "LONG" if pos.type == mt5.ORDER_TYPE_BUY else "SHORT"
             results.append({
                 "ticket": pos.ticket,
+                "symbol": pos.symbol,
                 "direction": direction,
                 "entry": pos.price_open,
                 "exit": close_price,

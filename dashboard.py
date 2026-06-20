@@ -82,7 +82,7 @@ def build_account_panel():
         table.add_row(Text("Bid / Ask:", style="dim"), Text(f"{tick.bid:.2f} / {tick.ask:.2f}", style="white"))
         table.add_row(Text("Spread:", style="dim"), Text(f"{spread:.0f} pts", style="white"))
 
-    return Panel(table, title=f"{config.SYMBOL}", border_style="dim")
+    return Panel(table, title=f"{config.DEFAULT_SYMBOL}", border_style="dim")
 
 
 def build_signal_panel():

@@ -1,10 +1,8 @@
 """
-signal_parser.py — Sends Telegram messages to Claude AI for parsing.
-Claude determines if a message is a tradeable signal and extracts
-direction, entry, SL, TP, and order type.
-Works with ANY signal provider format.
+signal_parser.py — Sends Telegram messages to an LLM (DeepSeek / OpenAI-compatible)
+for parsing. The LLM determines if a message is a tradeable signal and extracts
+direction, entry, SL, TP, and order type. Works with ANY signal provider format.
 """
-
 import json
 import httpx
 import config
@@ -22,7 +20,7 @@ RULES:
 7. "Buy stop" = pending buy above current price
 8. "Sell stop" = pending sell below current price
 9. If there are multiple take profits (TP1, TP2, TP3), include all of them.
-10. Only extract signals for Gold / XAUUSD / XAU. Ignore signals for other instruments.
+10. Extract the instrument/pair from the signal (e.g., XAUUSD, EURUSD, BTCUSD). If not clear, use "UNKNOWN".
 
 Respond ONLY with valid JSON, no markdown, no backticks, no explanation. Just the raw JSON object.
 
@@ -42,31 +40,34 @@ Here is the message to analyze:
 
 def parse_signal(message_text: str) -> dict | None:
     """
-    Send a message to Claude for parsing.
+    Send a message to the LLM for parsing.
     Returns the parsed signal dict or None if parsing fails.
     """
     if not message_text or not message_text.strip():
         return None
 
-    if not config.ANTHROPIC_API_KEY:
-        print("[ERROR] No Anthropic API key set in .env")
+    if not config.LLM_API_KEY:
+        print("[ERROR] No LLM API key set in .env")
         return None
 
     try:
         response = httpx.post(
-            "https://api.anthropic.com/v1/messages",
+            f"{config.LLM_BASE_URL}/chat/completions",
             headers={
-                "x-api-key": config.ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
+                "Authorization": "Bearer " + config.LLM_API_KEY,
+                "Content-Type": "application/json",
             },
             json={
-                "model": config.CLAUDE_MODEL,
+                "model": config.LLM_MODEL,
                 "max_tokens": 300,
                 "messages": [
                     {
+                        "role": "system",
+                        "content": PARSE_PROMPT,
+                    },
+                    {
                         "role": "user",
-                        "content": PARSE_PROMPT + message_text,
+                        "content": message_text,
                     }
                 ],
             },
@@ -74,23 +75,25 @@ def parse_signal(message_text: str) -> dict | None:
         )
 
         if response.status_code != 200:
-            print(f"[ERROR] Claude API returned {response.status_code}")
+            print(f"[ERROR] LLM API returned {response.status_code}: {response.text[:200]}")
             return None
 
         data = response.json()
-        text = data["content"][0]["text"].strip()
+        text = data["choices"][0]["message"]["content"].strip()
 
-        # Clean up in case Claude wraps it in backticks
+        # Clean up in case the LLM wraps it in backticks
         text = text.replace("```json", "").replace("```", "").strip()
 
         parsed = json.loads(text)
         return parsed
 
-    except json.JSONDecodeError as e:
-        print(f"[ERROR] Failed to parse Claude response as JSON: {e}")
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        print(f"[ERROR] Failed to parse LLM response: {e}")
+        raw = locals().get("text", "N/A")
+        print(f"  Raw text: {raw}")
         return None
     except httpx.TimeoutException:
-        print("[ERROR] Claude API request timed out")
+        print("[ERROR] LLM API request timed out")
         return None
     except Exception as e:
         print(f"[ERROR] Signal parsing failed: {e}")
