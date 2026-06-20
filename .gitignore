@@ -1,0 +1,20 @@
+# Environment
+.env
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Logs
+*.log
+trade_log.json
+trade_log.json.tmp
+
+# IDE
+.vscode/
+.idea/
